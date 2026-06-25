@@ -1,14 +1,16 @@
 import os
 import re
 import time
+import requests
 from datetime import datetime, timezone
 from flask import Flask, Response, abort
 from xml.etree.ElementTree import Element, SubElement, tostring
+import xml.etree.ElementTree as ET
 import yt_dlp
 
 app = Flask(__name__)
 
-CHANNEL_HANDLE = os.environ.get("CHANNEL_HANDLE", "PaduTeam")
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "UCbbmy1wFvL1Xq0G9I-mLtQg")
 CHANNEL_NAME = os.environ.get("CHANNEL_NAME", "PaduTeam")
 BASE_URL = os.environ.get("BASE_URL", "https://your-app.up.railway.app").rstrip("/")
 MAX_EPISODES = int(os.environ.get("MAX_EPISODES", "20"))
@@ -18,43 +20,49 @@ CACHE_TTL = 3600
 
 
 def get_channel_videos():
-    cache_key = f"videos_{CHANNEL_HANDLE}"
+    """Récupère les vidéos via le flux RSS natif YouTube (pas de PO token nécessaire)"""
+    cache_key = f"videos_{CHANNEL_ID}"
     now = time.time()
     if cache_key in _cache and now - _cache[cache_key]["ts"] < CACHE_TTL:
         return _cache[cache_key]["data"]
 
-    ydl_opts = {
-        "quiet": False,
-        "no_warnings": False,
-        "extract_flat": True,
-        "playlistend": MAX_EPISODES,
-        "nocheckcertificate": True,
+    rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={CHANNEL_ID}"
+    resp = requests.get(rss_url, timeout=15)
+    resp.raise_for_status()
+
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015",
+        "media": "http://search.yahoo.com/mrss/",
     }
 
-    # Essaie plusieurs formats d'URL
-    urls_to_try = [
-        f"https://www.youtube.com/@{CHANNEL_HANDLE}/videos",
-        f"https://www.youtube.com/channel/{CHANNEL_HANDLE}/videos",
-        f"https://www.youtube.com/c/{CHANNEL_HANDLE}/videos",
-    ]
-
+    root = ET.fromstring(resp.content)
     videos = []
-    for url in urls_to_try:
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                videos = info.get("entries", []) or []
-                if videos:
-                    break
-        except Exception as e:
-            print(f"Erreur avec {url}: {e}")
-            continue
+
+    for entry in root.findall("atom:entry", ns)[:MAX_EPISODES]:
+        video_id = entry.findtext("yt:videoId", namespaces=ns)
+        title = entry.findtext("atom:title", namespaces=ns)
+        published = entry.findtext("atom:published", namespaces=ns)
+        description_el = entry.find(".//media:description", ns)
+        description = description_el.text if description_el is not None else ""
+        thumbnail_el = entry.find(".//media:thumbnail", ns)
+        thumbnail = thumbnail_el.get("url") if thumbnail_el is not None else ""
+
+        if video_id and title:
+            videos.append({
+                "id": video_id,
+                "title": title,
+                "published": published,
+                "description": description or "",
+                "thumbnail": thumbnail or "",
+            })
 
     _cache[cache_key] = {"data": videos, "ts": now}
     return videos
 
 
 def get_audio_url(video_id):
+    """Récupère l'URL audio directe via yt-dlp"""
     cache_key = f"audio_{video_id}"
     now = time.time()
     if cache_key in _cache and now - _cache[cache_key]["ts"] < 3600:
@@ -64,6 +72,8 @@ def get_audio_url(video_id):
         "quiet": True,
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "skip_download": True,
+        "nocheckcertificate": True,
+        "extractor_args": {"youtubetab": {"skip": ["webpage"]}},
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -71,13 +81,19 @@ def get_audio_url(video_id):
         result = {
             "url": info["url"],
             "duration": info.get("duration", 0),
-            "upload_date": info.get("upload_date", ""),
-            "description": info.get("description", ""),
-            "thumbnail": info.get("thumbnail", ""),
         }
 
     _cache[cache_key] = {"data": result, "ts": now}
     return result
+
+
+def parse_iso_date(iso_str):
+    """Convertit ISO 8601 en RFC 2822"""
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        return dt.strftime("%a, %d %b %Y %H:%M:%S +0000")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
 
 
 def format_duration(seconds):
@@ -88,36 +104,26 @@ def format_duration(seconds):
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def parse_upload_date(date_str):
-    try:
-        dt = datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
-        return dt.strftime("%a, %d %b %Y %H:%M:%S +0000")
-    except Exception:
-        return datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
-
-
 @app.route("/")
 def index():
     return f"""
     <h1>🎙️ {CHANNEL_NAME} Podcast RSS</h1>
-    <p>Flux RSS :</p>
+    <p>Flux RSS podcast :</p>
     <code>{BASE_URL}/feed.xml</code>
     <br><br>
     <p>Copiez cette URL dans <strong>Apple Podcasts → Ajouter un podcast par URL</strong></p>
     <br>
-    <p><a href="/feed.xml">Voir le flux XML</a></p>
-    <p><a href="/debug">Debug</a></p>
+    <p><a href="/feed.xml">Voir le flux XML</a> | <a href="/debug">Debug</a></p>
     """
 
 
 @app.route("/debug")
 def debug():
-    """Endpoint pour diagnostiquer les problèmes"""
     try:
         videos = get_channel_videos()
         return {
             "status": "ok",
-            "channel": CHANNEL_HANDLE,
+            "channel_id": CHANNEL_ID,
             "videos_found": len(videos),
             "first_video": videos[0].get("title") if videos else None,
             "base_url": BASE_URL,
@@ -139,19 +145,15 @@ def rss_feed():
 
     channel = SubElement(rss, "channel")
     SubElement(channel, "title").text = CHANNEL_NAME
-    SubElement(channel, "link").text = f"https://www.youtube.com/@{CHANNEL_HANDLE}"
+    SubElement(channel, "link").text = f"https://www.youtube.com/channel/{CHANNEL_ID}"
     SubElement(channel, "description").text = f"Flux audio de {CHANNEL_NAME}"
     SubElement(channel, "language").text = "fr"
     SubElement(channel, "itunes:author").text = CHANNEL_NAME
     SubElement(channel, "itunes:type").text = "episodic"
 
-    for video in videos[:MAX_EPISODES]:
-        if not video:
-            continue
-        video_id = video.get("id") or video.get("url", "").split("v=")[-1]
-        title = video.get("title", "Sans titre")
-        if not video_id or len(video_id) != 11:
-            continue
+    for video in videos:
+        video_id = video["id"]
+        title = video["title"]
 
         item = SubElement(channel, "item")
         SubElement(item, "title").text = title
@@ -160,24 +162,19 @@ def rss_feed():
         guid.set("isPermaLink", "false")
         guid.text = video_id
 
-        audio_proxy_url = f"{BASE_URL}/audio/{video_id}"
         enclosure = SubElement(item, "enclosure")
-        enclosure.set("url", audio_proxy_url)
+        enclosure.set("url", f"{BASE_URL}/audio/{video_id}")
         enclosure.set("type", "audio/mpeg")
         enclosure.set("length", "0")
 
         SubElement(item, "itunes:title").text = title
         SubElement(item, "itunes:episodeType").text = "full"
-        SubElement(item, "pubDate").text = parse_upload_date(video.get("upload_date", ""))
+        SubElement(item, "pubDate").text = parse_iso_date(video.get("published", ""))
+        SubElement(item, "description").text = video.get("description", "")[:500]
 
-        duration = video.get("duration")
-        if duration:
-            SubElement(item, "itunes:duration").text = format_duration(duration)
-
-        thumbnail = video.get("thumbnail", "")
-        if thumbnail:
+        if video.get("thumbnail"):
             img = SubElement(item, "itunes:image")
-            img.set("href", thumbnail)
+            img.set("href", video["thumbnail"])
 
     xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(rss, encoding="unicode")
     return Response(xml_str, mimetype="application/rss+xml")
