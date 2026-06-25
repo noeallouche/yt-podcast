@@ -39,6 +39,12 @@ def get_channel_videos():
     root = ET.fromstring(resp.content)
     videos = []
 
+    # Récupère l'image de la chaîne depuis le premier thumbnail disponible
+    channel_image = ""
+    first_thumb = root.find(".//media:thumbnail", ns)
+    if first_thumb is not None:
+        channel_image = first_thumb.get("url", "")
+
     for entry in root.findall("atom:entry", ns)[:MAX_EPISODES]:
         video_id = entry.findtext("yt:videoId", namespaces=ns)
         title = entry.findtext("atom:title", namespaces=ns)
@@ -57,7 +63,7 @@ def get_channel_videos():
                 "thumbnail": thumbnail or "",
             })
 
-    _cache[cache_key] = {"data": videos, "ts": now}
+    _cache[cache_key] = {"data": videos, "ts": now, "channel_image": channel_image}
     return videos
 
 
@@ -73,7 +79,9 @@ def get_audio_url(video_id):
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "skip_download": True,
         "nocheckcertificate": True,
-        "extractor_args": {"youtubetab": {"skip": ["webpage"]}},
+        "extractor_args": {
+            "youtube": {"player_client": ["ios"]},
+        },
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -136,6 +144,7 @@ def debug():
 def rss_feed():
     try:
         videos = get_channel_videos()
+        channel_image = _cache.get(f"videos_{CHANNEL_ID}", {}).get("channel_image", "")
     except Exception as e:
         return Response(f"Erreur: {e}", status=500)
 
@@ -152,8 +161,10 @@ def rss_feed():
     SubElement(channel, "itunes:type").text = "episodic"
     itunes_cat = SubElement(channel, "itunes:category")
     itunes_cat.set("text", "Society &amp; Culture")
+    SubElement(itunes_cat, "itunes:category").set("text", "Documentary")
+    SubElement(channel, "itunes:explicit").text = "no"
     itunes_img = SubElement(channel, "itunes:image")
-    itunes_img.set("href", f"https://yt3.googleusercontent.com/channel/{CHANNEL_ID}")
+    itunes_img.set("href", channel_image or f"https://i.ytimg.com/vi/{videos[0]['id'] if videos else ''}/hqdefault.jpg")
 
     for video in videos:
         video_id = video["id"]
@@ -167,8 +178,8 @@ def rss_feed():
         guid.text = video_id
 
         enclosure = SubElement(item, "enclosure")
-        enclosure.set("url", f"{BASE_URL}/audio/{video_id}")
-        enclosure.set("type", "audio/mpeg")
+        enclosure.set("url", f"{BASE_URL}/audio/{video_id}.m4a")
+        enclosure.set("type", "audio/x-m4a")
         enclosure.set("length", "1")
 
         SubElement(item, "itunes:title").text = title
@@ -184,6 +195,7 @@ def rss_feed():
     return Response(xml_str, mimetype="application/rss+xml")
 
 
+@app.route("/audio/<video_id>.m4a")
 @app.route("/audio/<video_id>")
 def audio_proxy(video_id):
     if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
