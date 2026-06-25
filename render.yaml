@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: yt-podcast
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: CHANNEL_ID
+        value: UCbbmy1wFvL1Xq0G9I-mLtQg
+      - key: CHANNEL_NAME
+        value: PaduTeam
+      - key: BASE_URL
+        value: https://yt-podcast.onrender.com
+      - key: MAX_EPISODES
+        value: "20"
