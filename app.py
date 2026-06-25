@@ -150,6 +150,10 @@ def rss_feed():
     SubElement(channel, "language").text = "fr"
     SubElement(channel, "itunes:author").text = CHANNEL_NAME
     SubElement(channel, "itunes:type").text = "episodic"
+    itunes_cat = SubElement(channel, "itunes:category")
+    itunes_cat.set("text", "Society &amp; Culture")
+    itunes_img = SubElement(channel, "itunes:image")
+    itunes_img.set("href", f"https://yt3.googleusercontent.com/channel/{CHANNEL_ID}")
 
     for video in videos:
         video_id = video["id"]
@@ -165,7 +169,7 @@ def rss_feed():
         enclosure = SubElement(item, "enclosure")
         enclosure.set("url", f"{BASE_URL}/audio/{video_id}")
         enclosure.set("type", "audio/mpeg")
-        enclosure.set("length", "0")
+        enclosure.set("length", "1")
 
         SubElement(item, "itunes:title").text = title
         SubElement(item, "itunes:episodeType").text = "full"
