@@ -28,11 +28,13 @@ def get_channel_videos():
         "no_warnings": False,
         "extract_flat": True,
         "playlistend": MAX_EPISODES,
+        "nocheckcertificate": True,
     }
 
-    # Essaie d'abord avec le handle, puis avec l'ID
+    # Essaie plusieurs formats d'URL
     urls_to_try = [
         f"https://www.youtube.com/@{CHANNEL_HANDLE}/videos",
+        f"https://www.youtube.com/channel/{CHANNEL_HANDLE}/videos",
         f"https://www.youtube.com/c/{CHANNEL_HANDLE}/videos",
     ]
 
