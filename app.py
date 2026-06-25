@@ -2,10 +2,12 @@ import os
 import re
 import time
 import requests
+import io
 from datetime import datetime, timezone
-from flask import Flask, Response, abort
+from flask import Flask, Response, abort, send_file
 from xml.etree.ElementTree import Element, SubElement, tostring
 import xml.etree.ElementTree as ET
+from PIL import Image
 import yt_dlp
 
 app = Flask(__name__)
@@ -161,10 +163,14 @@ def rss_feed():
     SubElement(channel, "itunes:type").text = "episodic"
     itunes_cat = SubElement(channel, "itunes:category")
     itunes_cat.set("text", "Society &amp; Culture")
-    SubElement(itunes_cat, "itunes:category").set("text", "Documentary")
+    itunes_subcat = SubElement(itunes_cat, "itunes:category")
+    itunes_subcat.set("text", "Documentary")
     SubElement(channel, "itunes:explicit").text = "no"
     itunes_img = SubElement(channel, "itunes:image")
-    itunes_img.set("href", channel_image or f"https://i.ytimg.com/vi/{videos[0]['id'] if videos else ''}/hqdefault.jpg")
+    # Utilise la miniature YouTube en haute résolution (maxresdefault = 1280x720 minimum)
+    first_video_id = videos[0]["id"] if videos else ""
+    img_url = channel_image or (f"https://i.ytimg.com/vi/{first_video_id}/maxresdefault.jpg" if first_video_id else "")
+    itunes_img.set("href", f"{BASE_URL}/artwork.jpg")
 
     for video in videos:
         video_id = video["id"]
@@ -193,6 +199,44 @@ def rss_feed():
 
     xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(rss, encoding="unicode")
     return Response(xml_str, mimetype="application/rss+xml")
+
+
+@app.route("/artwork.jpg")
+def artwork():
+    """Sert l'image de la chaîne en 1400x1400 (requis par Apple)"""
+    try:
+        # Récupère la miniature de la première vidéo en haute résolution
+        videos = get_channel_videos()
+        first_id = videos[0]["id"] if videos else None
+        img_url = None
+        if first_id:
+            for size in ["maxresdefault", "hqdefault", "mqdefault"]:
+                test_url = f"https://i.ytimg.com/vi/{first_id}/{size}.jpg"
+                r = requests.get(test_url, timeout=10)
+                if r.status_code == 200:
+                    img_url = test_url
+                    img_data = r.content
+                    break
+
+        if not img_url:
+            abort(404)
+
+        # Redimensionne en 1400x1400 carré
+        img = Image.open(io.BytesIO(img_data)).convert("RGB")
+        # Crop centré pour rendre carré
+        w, h = img.size
+        side = min(w, h)
+        left = (w - side) // 2
+        top = (h - side) // 2
+        img = img.crop((left, top, left + side, top + side))
+        img = img.resize((1400, 1400), Image.LANCZOS)
+
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        buf.seek(0)
+        return send_file(buf, mimetype="image/jpeg")
+    except Exception as e:
+        return Response(f"Erreur artwork: {e}", status=500)
 
 
 @app.route("/audio/<video_id>.m4a")
