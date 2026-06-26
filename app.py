@@ -161,15 +161,8 @@ def rss_feed():
     SubElement(channel, "language").text = "fr"
     SubElement(channel, "itunes:author").text = CHANNEL_NAME
     SubElement(channel, "itunes:type").text = "episodic"
-    itunes_cat = SubElement(channel, "itunes:category")
-    itunes_cat.set("text", "Society &amp; Culture")
-    itunes_subcat = SubElement(itunes_cat, "itunes:category")
-    itunes_subcat.set("text", "Documentary")
     SubElement(channel, "itunes:explicit").text = "no"
     itunes_img = SubElement(channel, "itunes:image")
-    # Utilise la miniature YouTube en haute résolution (maxresdefault = 1280x720 minimum)
-    first_video_id = videos[0]["id"] if videos else ""
-    img_url = channel_image or (f"https://i.ytimg.com/vi/{first_video_id}/maxresdefault.jpg" if first_video_id else "")
     itunes_img.set("href", f"{BASE_URL}/artwork.jpg")
 
     for video in videos:
@@ -198,6 +191,9 @@ def rss_feed():
             img.set("href", video["thumbnail"])
 
     xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(rss, encoding="unicode")
+    # Injection manuelle de la catégorie — ElementTree encode mal les & dans les attributs
+    category_xml = '<itunes:category text="Society &amp; Culture"><itunes:category text="Documentary"/></itunes:category>'
+    xml_str = xml_str.replace('<itunes:type>episodic</itunes:type>', f'<itunes:type>episodic</itunes:type>{category_xml}')
     return Response(xml_str, mimetype="application/rss+xml")
 
 
